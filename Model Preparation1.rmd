@@ -1,0 +1,341 @@
+---
+title: "Econometrics final project regression model prep"
+output: html_notebook
+---
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require("knitr")
+opts_knit$set(root.dir = new)
+```
+
+```{r Basics, include=FALSE}
+rm(list= ls())
+library(readr)
+library(dplyr)
+library(car)
+library(tidyr)
+library(ggplot2)
+library(GGally)
+library(mctest)
+library(sandwich)
+library(stargazer)
+library(corpcor)
+library(ppcor)
+library(scales)
+library(AER)
+
+state_model <- read_csv("state_model_data_new.csv")
+#state_model$Net_Consumption <- state_model$Median_Income - state_model$PCE
+#write.table(state_model,file="state_model_data_new.csv",sep = ",",row.names = FALSE)
+```
+
+# Tests for Heteroskedasticity in Error Terms
+```{r Median Income}
+# Median Income
+hetero <- state_model %>% group_by(State,Year) %>% summarize(Rate = mean(Rate), Median_Income = mean(Median_Income))
+reg <- lm(Rate ~ Median_Income, data= hetero)
+summary(reg)
+confint(reg)
+
+cse = function(reg) {
+rob = sqrt(diag(vcovHC(reg, type = "HC1")))
+return(rob)
+}
+
+stargazer(reg, se=list(cse(reg)), title="Effect of Median Income on Unemployment Rate",
+type="text", df=FALSE, digits=3)
+
+par(mfrow=c(2,2))
+plot(reg)
+
+```
+
+```{r Federal Surplus/Deficit}
+# Fed_Surp_Def
+hetero_1 <- state_model %>% group_by(Year,Month) %>% summarize(Rate = mean(Rate), Fed_Surp_Def = mean(Fed_Surp_Def))
+reg1 <- lm(Rate ~ Fed_Surp_Def, data= hetero_1)
+summary(reg1)
+cse = function(reg1) {
+rob = sqrt(diag(vcovHC(reg1, type = "HC1")))
+return(rob)
+}
+
+stargazer(reg1, se=list(cse(reg1)), title="Effect of Median Income on Unemployment Rate",
+type="text", df=FALSE, digits=3)
+
+par(mfrow=c(2,2))
+plot(reg1)
+```
+
+# Tests for multicollinerity
+```{r Continuous Variables}
+# 1
+test1 <- subset(state_model, select = c(Median_Income,PCE,Interest_Rate,Fed_Surp_Def,Population,HVI))
+ggpairs(test1)
+
+pcor(test1, method = "pearson")
+```
+
+# Logit Models
+```{r Probability of Republican}
+logit <- glm(Republican ~ Median_Income, family = binomial(link="probit"), data = state_model)
+
+# Confidence Intervals
+confint(logit)
+
+# Z test - SIGNIFICANT!!
+coeftest(logit, vcov. = vcovHC, type = "HC1")
+
+# Plot
+ggplot(data=state_model, aes(x=Median_Income, y=Republican)) + 
+  geom_point() +  
+  labs(title="Logit Model of Probability of State being Republican, Given Median Income") +
+  labs(x="Median Income", y="Probability of State being Republican")+
+  stat_smooth(method="glm", method.args=list(family="binomial"), se=FALSE)
+
+
+###### Adding another variable into the model (Region)
+logit1 <- glm(Republican ~ Median_Income + South + AboveHigh_Rank, family = binomial(link="probit"), data = state_model)
+summary(logit1)
+
+# Z test - SIGNIFICANT!!
+coeftest(logit1, vcov. = vcovHC, type = "HC1")
+
+# Finding the change
+predictions <- predict(logit1, 
+                       newdata = data.frame("South" = c(0,1), 
+                                            "Median_Income" = c(35700,35700)),
+                       type = "response")
+
+predictions
+diff(predictions)
+
+# CONCLUSION: We find that non-Southern states have a 73.7% probability of being Republican, while Southern states have a 93.4% probability of being Republican.
+# Include omitted variable bias
+```
+
+```{r Probability of High Unemployment}
+# Home Value Index of State vs. Unemployment Rate
+logit <- glm(High_Unemp ~ HVI, family = binomial(link="probit"), data = state_model)
+summary(logit)
+
+# Confidence Intervals
+confint(logit)
+
+# Z test - SIGNIFICANT!!
+coeftest(logit, vcov. = vcovHC, type = "HC1")
+
+# Plot
+ggplot(data=state_model, aes(x=HVI, y=High_Unemp)) + 
+  geom_point() +  
+  labs(title="Logit Model of Probability of High Unemployment, Given Home Value Index") +
+  labs(x="Median Income", y="Probability of State being Republican")+
+  stat_smooth(method="glm", method.args=list(family="binomial"), se=FALSE)
+
+
+###### Adding another variable into the model (Region)
+logit1 <- glm(High_Unemp ~ Population + West, family = binomial(link="probit"), data = state_model)
+
+# Z test - SIGNIFICANT!!
+coeftest(logit1, vcov. = vcovHC, type = "HC1")
+
+# Finding the change
+predictions <- predict(logit1, 
+                       newdata = data.frame("West" = c(0,1), 
+                                            "HVI" = c(35700,35700),
+                                            "Population" = c(200000,200000)),
+                       type = "response")
+
+predictions
+diff(predictions)
+
+# CONCLUSION: We find that non-Western states have a 63% probability of experiencing high unemployment while Western states have a 78% probability of experiencing high unemployment. This is a difference of 15% in probability of unemployment. 
+```
+
+```{r Probability of High Unemployment - Cont.}
+# Playing around with other regions
+logit1 <- glm(High_Unemp ~ Median_Income + Midwest, family = binomial(link="probit"), data = state_model)
+
+# Z test - SIGNIFICANT!!
+coeftest(logit1, vcov. = vcovHC, type = "HC1")
+
+# Finding the change
+predictions <- predict(logit1, 
+                       newdata = data.frame("Midwest" = c(0,1), 
+                                            "Median_Income" = c(35700,35700),
+                       type = "response"))
+
+predictions
+diff(predictions)
+
+# CONCLUSION: We find that non-Midwestern states have a 69.4% probability of experiencing high unemployment while Midwestern states have only a 30% of experiencing high unemployment. This is a large difference, which shows us that Midwestern states are less likely to experience high unemployment.
+```
+
+# Multiple Linear Regression Models
+```{r Model 1}
+# Income, Population, West, Republican
+model1 <- lm(Rate ~ 0 + Median_Income + Population + West + Republican, data = state_model)
+summary(model1)
+
+# First, we check for heteroskedasticity in the error terms
+par(mfrow=c(2,2))
+plot(model1)
+
+# FG test
+omcdiag(model1)
+
+# F test - Heteroskedastic
+linearHypothesis(model1, c("West=0","Republican=0","Median_Income=0"), white.adjust = "hc1")
+linearHypothesis(model1, c("West=0","Republican=0","Population=0"), white.adjust = "hc1")
+
+# Confidence model
+confint(model1)
+```
+```{r log linear}
+
+x <- log(state_model$Median_Income)
+y <- state_model$Rate
+plot <- cbind(x,y)
+plot <- as.data.frame(plot)
+
+ggplot(data=plot, aes(x=x, y=y))+
+geom_point(shape=1)+labs(title="Log linear model") +labs(x="State Median Income", y="Unemployment Rate")+geom_smooth(method='lm')
+#plot(y~x)
+#matlines(x,y,lwd=2)
+```
+```{r polynomial}
+norm <- state_model$Median_Income
+log <- log(state_model$Median_Income)
+square <- (state_model$Median_Income)^2
+cubic <- (state_model$Median_Income)^3
+y <- (state_model$Rate)
+
+polyn <- cbind(norm,square,cubic,log,y)
+polyn <- as.data.frame(polyn)
+
+linear <- lm(y~ norm, state_model)
+summary(linear)
+
+poly <- lm(y ~ norm + square, data = state_model)
+summary(poly)
+
+cubic <- lm(y ~ norm + square + cubic, data = state_model)
+summary(cubic)
+
+loglinear <- lm(y~ log, data = state_model)
+summary(loglinear)
+
+plot(norm, y, main= "Polynomial Regression of Median Income and Unemployment Rate",sub = "(2000-2019)", xlab="State Median Income", ylab="Unemployment Rate",data=state_model,las=1)
+abline(linear,lwd=3,col="red")
+
+lines(smooth.spline(norm,predict(poly)),col="blue",lwd=3)
+lines(smooth.spline(norm,predict(cubic)),col="green",lwd=3)
+anova(linear, cubic)
+
+#legend(1, 95, legend=c("norm:linear","square:poly x^2"),
+       #col=c("red", "blue"), lty=1:2, cex=0.8,
+       #title="Line types", text.font=4, bg='lightblue')
+
+#legend(46,15,legend = c("norm:linear","square:poly x^2","cubic:cubic x^3"),
+      #col=c("red","blue","green"),lty=c(1,1,3),lwd=3,bty="n",cex=0.9)
+```
+
+```{r Model 2}
+# 1. Model 2
+model1 <- lm(Rate ~ 0 + Median_Income + Fed_Surp_Def + Population, data = state_model)
+summary(model1)
+
+# Check for heteroskedasticity in the error terms
+par(mfrow=c(2,2))
+plot(model1)
+
+# FG test
+omcdiag(model1)
+
+# F test - Heteroskedastic
+linearHypothesis(model1, c("Northeast=0", "HVI=0","Fed_Surp_Def=0"), white.adjust = "hc1")
+
+# Confidence model
+confint(model1)
+```
+
+```{r Model 3}
+# 1. Model 2 - 
+model2 <- lm(Rate ~ AboveHigh_Rank + North, data = state_model_new
+            )
+summary(model2)
+
+# First, we check for heteroscedasticity in the error terms
+par(mfrow=c(2,2))
+plot(model2)
+
+# FG test
+omcdiag(model2)
+
+# F test - Heteroskedastic
+linearHypothesis(model1, c("West=0", "HVI=0","Fed_Surp_Def=0"), white.adjust = "hc1")
+
+# Confidence model
+confint(model1)
+
+omcdiag(model2)
+
+# 3. Model 3 - Rate vs. Income, & Region ( Midwest Only)
+model3 <- lm(Rate ~ (Median_Income)^2 + (Median_Income)^3, data = state_model)
+summary(model3)
+```
+
+```{r F-statistic}
+f <- lm(Rate ~ Median_Income + Interest_Rate + Northeast + West, data = state_model)
+linearHypothesis(reg, c("Man=0", "Caucasian=0"))
+```
+
+```{r STATES - Graphs}
+ggplot(data = state_model, aes(x = Fed_Surp_Def, y = Rate)) +
+  geom_point(alpha=0.3) + 
+  geom_smooth(aes(x=Fed_Surp_Def, y =Rate), method = 'lm') +
+  theme(axis.text.x = element_text(angle=90, size=10)) +
+  theme(plot.title = element_text(size=14, face="bold")) +
+  theme(legend.position = "none") +
+  labs(title="Unemployment Rates in the U.S. (1999-2019)", 
+  subtitle = "Monthly ~ For all 50 states", x="Date", y="Unemployment Rate (%)") 
+```
+
+```{r Heteroskedasticity}
+# Median Income
+hetero <- state_model %>% group_by(State,Year) %>% summarize(Rate = mean(Rate), Median_Income = mean(Median_Income))
+reg <- lm(Rate ~ Median_Income, data= hetero)
+summary(reg)
+confint(reg)
+cse = function(reg) {
+rob = sqrt(diag(vcovHC(reg, type = "HC1")))
+return(rob)
+}
+
+stargazer(reg, se=list(cse(reg)), title="Effect of Median Income on Unemployment Rate",
+type="text", df=FALSE, digits=3)
+
+par(mfrow=c(2,2))
+plot(reg)
+
+# Fed_Surp_Def
+hetero_1 <- state_model %>% group_by(Year,Month) %>% summarize(Rate = mean(Rate), Fed_Surp_Def = mean(Fed_Surp_Def))
+reg1 <- lm(Rate ~ Fed_Surp_Def, data= hetero_1)
+summary(reg1)
+cse = function(reg1) {
+rob = sqrt(diag(vcovHC(reg1, type = "HC1")))
+return(rob)
+}
+
+stargazer(reg1, se=list(cse(reg1)), title="Effect of Median Income on Unemployment Rate",
+type="text", df=FALSE, digits=3)
+
+par(mfrow=c(2,2))
+plot(reg1)
+```
+
+
+
+
+
+
