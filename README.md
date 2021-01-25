@@ -1,4 +1,4 @@
-# Econometrics-analysis
+# Econometrics-regression analysis
 
 Quantitative Research Analysis on Unemployment Rate in the U.S. 
 
